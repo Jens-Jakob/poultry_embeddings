@@ -14,16 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
-from torchvision import transforms
-
-
-def make_transform(resize=256, crop=224):
-    return transforms.Compose([
-        transforms.Resize(resize, interpolation=transforms.InterpolationMode.BICUBIC),
-        transforms.CenterCrop(crop),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-    ])
+from transformers import AutoImageProcessor, AutoModel
 
 
 def load_index(embeddings_dir):
@@ -32,10 +23,12 @@ def load_index(embeddings_dir):
     return embeddings, filenames
 
 
-def embed_single(image_path, model, transform, device):
-    image = transform(Image.open(image_path).convert("RGB")).unsqueeze(0).to(device)
+def embed_single(image_path, processor, model, device):
+    image = Image.open(image_path).convert("RGB")
+    inputs = processor(images=[image], return_tensors="pt").to(device)
     with torch.inference_mode():
-        emb = model(image).cpu().numpy()[0]
+        outputs = model(**inputs)
+    emb = outputs.pooler_output.cpu().numpy()[0]
     emb = emb / np.linalg.norm(emb)
     return emb
 
@@ -57,9 +50,9 @@ def search(reference_path, embeddings_dir, model_name, topk):
     else:
         print(f"Reference not in index, embedding on-the-fly...")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = torch.hub.load("facebookresearch/dinov2", model_name).to(device).eval()
-        transform = make_transform()
-        query = embed_single(reference_path, model, transform, device)
+        processor = AutoImageProcessor.from_pretrained(model_name)
+        model = AutoModel.from_pretrained(model_name).to(device).eval()
+        query = embed_single(reference_path, processor, model, device)
 
     # Cosine similarity (embeddings are already L2-normalized)
     scores = embeddings @ query
@@ -113,7 +106,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference", required=True, help="Path to reference image")
     parser.add_argument("--embeddings-dir", default="./embeddings", help="Directory with .npy files")
-    parser.add_argument("--model", default="dinov2_vitb14", help="DINOv2 model name")
+    parser.add_argument("--model", default="facebook/dinov3-vitb16-pretrain-lvd1689m")
     parser.add_argument("--topk", type=int, default=20)
     args = parser.parse_args()
 

@@ -1,6 +1,5 @@
 torch
 torchvision
-transformers
 Pillow
 numpy
 matplotlib

@@ -8,9 +8,9 @@ This is built for internal demonstration to the company. It is not a research pa
 
 ## Approach
 
-Use DINOv3 (self-supervised ViT) to embed images. Compare embeddings via cosine similarity. Return ranked results.
+Use DINOv2 (self-supervised ViT) to embed images. Compare embeddings via cosine similarity. Return ranked results. DINOv3 access is pending approval — switch to DINOv3 when available (code change is minimal).
 
-**Phase 1 (current):** Global `[CLS]` token embeddings. No bounding boxes. Full-image similarity. Evaluate by eyeball — do the top results look like the reference?
+**Phase 1 (current):** Global `[CLS]` token embeddings via DINOv2 ViT-B/14. No bounding boxes. Full-image similarity. Evaluate by eyeball — do the top results look like the reference?
 
 **Phase 2 (later):** ROI-based querying. User draws a bounding box on the reference defect region. Search is against patch-level embeddings cropped to that region. This is required for the production tool but not for the first smoke test.
 
@@ -27,7 +27,7 @@ Use DINOv3 (self-supervised ViT) to embed images. Compare embeddings via cosine 
 No bounding boxes. No metrics. Just:
 
 1. Pick 3 reference images: one with an obvious bruise, one with discoloration, one clean bird (sanity check)
-2. Embed all ~1000 images with DINOv3 global CLS embedding
+2. Embed all ~1000 images with DINOv2 global CLS embedding
 3. Rank by cosine similarity for each reference
 4. Inspect top 20 results per reference
 

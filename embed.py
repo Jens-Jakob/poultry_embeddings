@@ -1,5 +1,5 @@
 """
-Embed all images in a directory using DINOv3 ViT-B/16.
+Embed all images in a directory using DINOv2 ViT-B/14.
 Saves embeddings.npy and filenames.npy to an output directory.
 
 Usage:
@@ -14,7 +14,16 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image
-from transformers import AutoImageProcessor, AutoModel
+from torchvision import transforms
+
+
+def make_transform(resize=256, crop=224):
+    return transforms.Compose([
+        transforms.Resize(resize, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.CenterCrop(crop),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+    ])
 
 
 def load_images(data_dir):
@@ -33,8 +42,8 @@ def embed(data_dir, output_dir, model_name, batch_size):
     print(f"Using device: {device}")
 
     print(f"Loading model: {model_name}")
-    processor = AutoImageProcessor.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).to(device).eval()
+    model = torch.hub.load("facebookresearch/dinov2", model_name).to(device).eval()
+    transform = make_transform()
 
     image_paths = load_images(data_dir)
 
@@ -43,14 +52,12 @@ def embed(data_dir, output_dir, model_name, batch_size):
 
     for i in range(0, len(image_paths), batch_size):
         batch_paths = image_paths[i : i + batch_size]
-        images = [Image.open(p).convert("RGB") for p in batch_paths]
-        inputs = processor(images=images, return_tensors="pt").to(device)
+        images = [transform(Image.open(p).convert("RGB")) for p in batch_paths]
+        batch = torch.stack(images).to(device)
 
         with torch.inference_mode():
-            outputs = model(**inputs)
+            embeddings = model(batch).cpu().numpy()
 
-        # CLS token / pooled output — shape (batch, hidden_dim)
-        embeddings = outputs.pooler_output.cpu().numpy()
         all_embeddings.append(embeddings)
         all_filenames.extend([str(p) for p in batch_paths])
 
@@ -73,7 +80,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", required=True, help="Directory containing images")
     parser.add_argument("--output-dir", default="./embeddings", help="Where to save .npy files")
-    parser.add_argument("--model", default="facebook/dinov3-vitb16-pretrain-lvd1689m")
+    parser.add_argument("--model", default="dinov2_vitb14", help="DINOv2 model name (dinov2_vits14, dinov2_vitb14, dinov2_vitl14)")
     parser.add_argument("--batch-size", type=int, default=64)
     args = parser.parse_args()
 

@@ -205,7 +205,8 @@ def search(reference_path, embeddings_dir, model_name, topk, bbox):
         c = i % cols
         img = Image.open(filenames[idx]).convert("RGB")
         axes[r, c].imshow(img)
-        axes[r, c].set_title(f"#{i+1} ({scores[idx]:.3f})", fontsize=8)
+        img_id = os.path.basename(filenames[idx]).split("_")[0]
+        axes[r, c].set_title(f"#{i+1} img:{img_id} ({scores[idx]:.3f})", fontsize=8)
         axes[r, c].axis("off")
 
     for i in range(len(show), rows * cols):

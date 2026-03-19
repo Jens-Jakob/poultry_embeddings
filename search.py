@@ -11,6 +11,9 @@ Usage:
     # With explicit bbox (pixels on original image): x1,y1,x2,y2
     python search.py --reference "/path/to/image.bmp" --bbox 100,200,250,400
 
+    # Detail mode: side-by-side slideshow, arrow keys to navigate
+    python search.py --reference "/path/to/image.bmp" --detail
+
     # Change number of results
     python search.py --reference "/path/to/image.bmp" --topk 10
 """
@@ -128,7 +131,89 @@ def embed_patches_single(image_path, model_name):
     return patches
 
 
-def search(reference_path, embeddings_dir, model_name, topk, bbox):
+def show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk):
+    """Side-by-side slideshow: reference (left) + one result at a time (right). Arrow keys to navigate."""
+    show = ranked[:topk]
+    state = {"idx": 0}
+
+    fig, (ax_ref, ax_result) = plt.subplots(1, 2, figsize=(14, 8))
+
+    # Reference (stays fixed)
+    ax_ref.imshow(ref_img)
+    rect = mpatches.Rectangle((x1, y1), x2 - x1, y2 - y1,
+                               linewidth=2, edgecolor="red", facecolor="red", alpha=0.3)
+    ax_ref.add_patch(rect)
+    ax_ref.set_title("REFERENCE (ROI)", fontsize=12, fontweight="bold", color="red")
+    ax_ref.axis("off")
+
+    def render(i):
+        ax_result.clear()
+        idx = show[i]
+        img = Image.open(filenames[idx]).convert("RGB")
+        ax_result.imshow(img)
+        img_id = os.path.basename(filenames[idx]).split("_")[0]
+        ax_result.set_title(f"#{i+1}/{topk}  img:{img_id}  score:{scores[idx]:.3f}", fontsize=12)
+        ax_result.axis("off")
+        fig.suptitle("← → arrow keys to navigate, Q to quit", fontsize=10, color="gray")
+        fig.canvas.draw_idle()
+
+    def on_key(event):
+        if event.key == "right" and state["idx"] < topk - 1:
+            state["idx"] += 1
+            render(state["idx"])
+        elif event.key == "left" and state["idx"] > 0:
+            state["idx"] -= 1
+            render(state["idx"])
+        elif event.key == "q":
+            plt.close(fig)
+
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    render(0)
+    plt.tight_layout()
+    plt.show()
+
+
+def show_grid(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk):
+    """Grid view: reference + all top-K results."""
+    show = ranked[:topk]
+    cols = min(topk, 5)
+    rows = (topk + cols - 1) // cols
+    fig, axes = plt.subplots(rows + 1, cols, figsize=(3 * cols, 3 * (rows + 1)))
+
+    if rows + 1 == 1:
+        axes = axes[np.newaxis, :]
+    if cols == 1:
+        axes = axes[:, np.newaxis]
+
+    # Reference with bbox overlay
+    for c in range(cols):
+        axes[0, c].axis("off")
+    axes[0, 0].imshow(ref_img)
+    rect = mpatches.Rectangle((x1, y1), x2 - x1, y2 - y1,
+                               linewidth=2, edgecolor="red", facecolor="red", alpha=0.3)
+    axes[0, 0].add_patch(rect)
+    axes[0, 0].set_title("REFERENCE (ROI)", fontsize=10, fontweight="bold", color="red")
+
+    # Results
+    for i, idx in enumerate(show):
+        r = 1 + i // cols
+        c = i % cols
+        img = Image.open(filenames[idx]).convert("RGB")
+        axes[r, c].imshow(img)
+        img_id = os.path.basename(filenames[idx]).split("_")[0]
+        axes[r, c].set_title(f"#{i+1} img:{img_id} ({scores[idx]:.3f})", fontsize=8)
+        axes[r, c].axis("off")
+
+    for i in range(len(show), rows * cols):
+        r = 1 + i // cols
+        c = i % cols
+        axes[r, c].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+
+def search(reference_path, embeddings_dir, model_name, topk, bbox, detail=False):
     all_patches, filenames, meta = load_index(embeddings_dir)
     grid_h, grid_w = int(meta["grid_h"]), int(meta["grid_w"])
 
@@ -179,43 +264,11 @@ def search(reference_path, embeddings_dir, model_name, topk, bbox):
     for rank, idx in enumerate(ranked[:topk], 1):
         print(f"  #{rank:2d}  score={scores[idx]:.4f}  {os.path.basename(filenames[idx])}")
 
-    # Plot
-    show = ranked[:topk]
-    cols = min(topk, 5)
-    rows = (topk + cols - 1) // cols
-    fig, axes = plt.subplots(rows + 1, cols, figsize=(3 * cols, 3 * (rows + 1)))
-
-    if rows + 1 == 1:
-        axes = axes[np.newaxis, :]
-    if cols == 1:
-        axes = axes[:, np.newaxis]
-
-    # Reference with bbox overlay
-    for c in range(cols):
-        axes[0, c].axis("off")
-    axes[0, 0].imshow(ref_img)
-    rect = mpatches.Rectangle((x1, y1), x2 - x1, y2 - y1,
-                               linewidth=2, edgecolor="red", facecolor="red", alpha=0.3)
-    axes[0, 0].add_patch(rect)
-    axes[0, 0].set_title("REFERENCE (ROI)", fontsize=10, fontweight="bold", color="red")
-
-    # Results
-    for i, idx in enumerate(show):
-        r = 1 + i // cols
-        c = i % cols
-        img = Image.open(filenames[idx]).convert("RGB")
-        axes[r, c].imshow(img)
-        img_id = os.path.basename(filenames[idx]).split("_")[0]
-        axes[r, c].set_title(f"#{i+1} img:{img_id} ({scores[idx]:.3f})", fontsize=8)
-        axes[r, c].axis("off")
-
-    for i in range(len(show), rows * cols):
-        r = 1 + i // cols
-        c = i % cols
-        axes[r, c].axis("off")
-
-    plt.tight_layout()
-    plt.show()
+    # Display results
+    if detail:
+        show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk)
+    else:
+        show_grid(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk)
 
 
 if __name__ == "__main__":
@@ -226,10 +279,12 @@ if __name__ == "__main__":
     parser.add_argument("--topk", type=int, default=20)
     parser.add_argument("--bbox", type=str, default=None,
                         help="Bounding box as x1,y1,x2,y2 in pixels. If omitted, draw interactively.")
+    parser.add_argument("--detail", action="store_true",
+                        help="Side-by-side slideshow mode. Arrow keys to navigate results.")
     args = parser.parse_args()
 
     bbox = None
     if args.bbox:
         bbox = tuple(int(v) for v in args.bbox.split(","))
 
-    search(args.reference, args.embeddings_dir, args.model, args.topk, bbox)
+    search(args.reference, args.embeddings_dir, args.model, args.topk, bbox, detail=args.detail)

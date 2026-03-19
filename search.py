@@ -93,20 +93,30 @@ def score_candidates(query_patches, all_patches):
 
     query_patches: (num_query, dim)
     all_patches: (N, num_patches, dim)
-    Returns: (N,) scores
+    Returns: (N,) scores, (N, num_query) matched patch indices per candidate
     """
-    # (num_query, dim) @ (N, dim, num_patches) -> (N, num_query, num_patches)
-    # Do it in one matmul by reshaping
     N = all_patches.shape[0]
-    # (num_query, dim) @ (dim, N*num_patches) -> (num_query, N*num_patches)
+    num_patches = all_patches.shape[1]
     sims = query_patches @ all_patches.reshape(-1, all_patches.shape[2]).T
-    # Reshape to (num_query, N, num_patches)
-    sims = sims.reshape(query_patches.shape[0], N, all_patches.shape[1])
-    # Best match per query patch per candidate: (num_query, N)
-    best_per_query = sims.max(axis=2)
-    # Average across query patches: (N,)
-    scores = best_per_query.mean(axis=0)
-    return scores
+    sims = sims.reshape(query_patches.shape[0], N, num_patches)
+    # Best match per query patch per candidate
+    best_per_query = sims.max(axis=2)       # (num_query, N)
+    match_indices = sims.argmax(axis=2)     # (num_query, N) — which patch matched
+    scores = best_per_query.mean(axis=0)    # (N,)
+    # Transpose match_indices to (N, num_query) for convenience
+    return scores, match_indices.T
+
+
+def matched_patches_to_bbox(match_indices, grid_w, grid_h, img_w, img_h):
+    """Convert a set of matched patch indices to a pixel bounding box on the original image."""
+    rows = match_indices // grid_w
+    cols = match_indices % grid_w
+    # Patch grid coords to pixel coords
+    px_x1 = int(cols.min() / grid_w * img_w)
+    px_y1 = int(rows.min() / grid_h * img_h)
+    px_x2 = int((cols.max() + 1) / grid_w * img_w)
+    px_y2 = int((rows.max() + 1) / grid_h * img_h)
+    return px_x1, px_y1, px_x2, px_y2
 
 
 def embed_patches_single(image_path, model_name):
@@ -131,7 +141,8 @@ def embed_patches_single(image_path, model_name):
     return patches
 
 
-def show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk):
+def show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk,
+                match_bboxes=None):
     """Side-by-side slideshow: reference (left) + one result at a time (right). Arrow keys to navigate."""
     show = ranked[:topk]
     state = {"idx": 0}
@@ -151,6 +162,15 @@ def show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk):
         idx = show[i]
         img = Image.open(filenames[idx]).convert("RGB")
         ax_result.imshow(img)
+
+        # Draw matched region on candidate
+        if match_bboxes is not None:
+            mx1, my1, mx2, my2 = match_bboxes[idx]
+            match_rect = mpatches.Rectangle(
+                (mx1, my1), mx2 - mx1, my2 - my1,
+                linewidth=2, edgecolor="cyan", facecolor="cyan", alpha=0.3)
+            ax_result.add_patch(match_rect)
+
         img_id = os.path.basename(filenames[idx]).split("_")[0]
         ax_result.set_title(f"#{i+1}/{topk}  img:{img_id}  score:{scores[idx]:.3f}", fontsize=12)
         ax_result.axis("off")
@@ -173,7 +193,8 @@ def show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk):
     plt.show()
 
 
-def show_grid(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk):
+def show_grid(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk,
+              match_bboxes=None):
     """Grid view: reference + all top-K results."""
     show = ranked[:topk]
     cols = min(topk, 5)
@@ -200,6 +221,14 @@ def show_grid(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk):
         c = i % cols
         img = Image.open(filenames[idx]).convert("RGB")
         axes[r, c].imshow(img)
+
+        if match_bboxes is not None:
+            mx1, my1, mx2, my2 = match_bboxes[idx]
+            match_rect = mpatches.Rectangle(
+                (mx1, my1), mx2 - mx1, my2 - my1,
+                linewidth=1.5, edgecolor="cyan", facecolor="cyan", alpha=0.25)
+            axes[r, c].add_patch(match_rect)
+
         img_id = os.path.basename(filenames[idx]).split("_")[0]
         axes[r, c].set_title(f"#{i+1} img:{img_id} ({scores[idx]:.3f})", fontsize=8)
         axes[r, c].axis("off")
@@ -255,8 +284,19 @@ def search(reference_path, embeddings_dir, model_name, topk, bbox, detail=False)
     query_patches = ref_patches[patch_indices]  # (num_query, dim)
 
     # Score all candidates
-    scores = score_candidates(query_patches, all_patches)
+    scores, match_indices = score_candidates(query_patches, all_patches)
     ranked = np.argsort(scores)[::-1]
+
+    # Compute matched-region bboxes for each candidate image
+    # match_indices is (N, num_query) — for each image, which patches matched the query
+    match_bboxes = {}
+    for idx in ranked[:topk]:
+        candidate_img = Image.open(filenames[idx]).convert("RGB")
+        cw, ch = candidate_img.size
+        mx1, my1, mx2, my2 = matched_patches_to_bbox(
+            match_indices[idx], grid_w, grid_h, cw, ch
+        )
+        match_bboxes[idx] = (mx1, my1, mx2, my2)
 
     # Print results
     print(f"\nTop {topk} matches for ROI on: {os.path.basename(reference_path)}")
@@ -266,9 +306,9 @@ def search(reference_path, embeddings_dir, model_name, topk, bbox, detail=False)
 
     # Display results
     if detail:
-        show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk)
+        show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk, match_bboxes)
     else:
-        show_grid(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk)
+        show_grid(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk, match_bboxes)
 
 
 if __name__ == "__main__":

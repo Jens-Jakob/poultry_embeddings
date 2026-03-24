@@ -5,8 +5,11 @@ Draw a bounding box on a reference image to find images with similar
 local textures in that region.
 
 Usage:
-    # Interactive: opens image, draw a box, close window to search
+    # Single image: opens image, draw a box, close window to search
     python search.py --reference "/path/to/image.bmp"
+
+    # Folder of reference images: bbox drawn (or specified) per image
+    python search.py --reference "/path/to/refs/"
 
     # With explicit bbox (pixels on original image): x1,y1,x2,y2
     python search.py --reference "/path/to/image.bmp" --bbox 100,200,250,400
@@ -20,6 +23,7 @@ Usage:
 
 import argparse
 import os
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -246,42 +250,66 @@ def search(reference_path, embeddings_dir, model_name, topk, bbox, detail=False)
     all_patches, filenames, meta = load_index(embeddings_dir)
     grid_h, grid_w = int(meta["grid_h"]), int(meta["grid_w"])
 
-    # Get reference patches
-    ref_abs = os.path.abspath(reference_path)
-    match_idx = None
-    for i, fn in enumerate(filenames):
-        if os.path.abspath(fn) == ref_abs:
-            match_idx = i
-            break
-
-    if match_idx is not None:
-        print(f"Reference found in index at position {match_idx}")
-        ref_patches = all_patches[match_idx]
+    # Collect reference image paths (file or folder)
+    if os.path.isdir(reference_path):
+        exts = {".bmp", ".jpg", ".jpeg", ".png", ".tiff", ".tif"}
+        ref_paths = sorted(
+            p for p in Path(reference_path).rglob("*") if p.suffix.lower() in exts
+        )
+        if not ref_paths:
+            raise FileNotFoundError(f"No images found in {reference_path}")
+        print(f"Using {len(ref_paths)} reference images from {reference_path}")
     else:
-        print(f"Reference not in index, embedding on-the-fly...")
-        ref_patches = embed_patches_single(reference_path, model_name)
+        ref_paths = [Path(reference_path)]
 
-    # Get bbox
-    ref_img = Image.open(reference_path).convert("RGB")
-    img_w, img_h = ref_img.size
+    all_query_patches = []
+    first_ref_img = None
+    first_bbox = None
 
-    if bbox is None:
-        x1, y1, x2, y2 = draw_bbox(reference_path)
-    else:
-        x1, y1, x2, y2 = bbox
+    for ref_path in ref_paths:
+        ref_abs = os.path.abspath(ref_path)
+        match_idx = None
+        for i, fn in enumerate(filenames):
+            if os.path.abspath(fn) == ref_abs:
+                match_idx = i
+                break
 
-    # Map to patch grid
-    patch_indices, row1, col1, row2, col2 = bbox_to_patch_indices(
-        x1, y1, x2, y2, img_w, img_h, grid_w, grid_h
-    )
-    print(f"Bbox maps to patch grid [{row1}:{row2}, {col1}:{col2}] ({len(patch_indices)} patches)")
+        if match_idx is not None:
+            print(f"Reference {ref_path.name} found in index at position {match_idx}")
+            ref_patches = all_patches[match_idx]
+        else:
+            print(f"Reference {ref_path.name} not in index, embedding on-the-fly...")
+            ref_patches = embed_patches_single(str(ref_path), model_name)
 
-    if not patch_indices:
-        print("ERROR: bbox too small, maps to zero patches. Draw a larger box.")
+        ref_img = Image.open(ref_path).convert("RGB")
+        img_w, img_h = ref_img.size
+
+        if bbox is None:
+            x1, y1, x2, y2 = draw_bbox(str(ref_path))
+        else:
+            x1, y1, x2, y2 = bbox
+
+        if first_ref_img is None:
+            first_ref_img = ref_img
+            first_bbox = (x1, y1, x2, y2)
+
+        patch_indices, row1, col1, row2, col2 = bbox_to_patch_indices(
+            x1, y1, x2, y2, img_w, img_h, grid_w, grid_h
+        )
+        print(f"  {ref_path.name}: patch grid [{row1}:{row2}, {col1}:{col2}] ({len(patch_indices)} patches)")
+
+        if not patch_indices:
+            print(f"  WARNING: bbox too small for {ref_path.name}, skipping.")
+            continue
+
+        all_query_patches.append(ref_patches[patch_indices])
+
+    if not all_query_patches:
+        print("ERROR: no valid query patches from any reference image.")
         return
 
-    # Extract query patches
-    query_patches = ref_patches[patch_indices]  # (num_query, dim)
+    query_patches = np.concatenate(all_query_patches, axis=0)
+    print(f"Total query patches: {query_patches.shape[0]}")
 
     # Score all candidates
     scores, match_indices = score_candidates(query_patches, all_patches)
@@ -306,16 +334,17 @@ def search(reference_path, embeddings_dir, model_name, topk, bbox, detail=False)
         full_path = os.path.abspath(filenames[idx])
         print(f"  #{rank:2d}  score={scores[idx]:.4f}  {full_path}")
 
-    # Display results
+    # Display uses the first reference image for visual context
+    x1, y1, x2, y2 = first_bbox
     if detail:
-        show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk, match_bboxes)
+        show_detail(first_ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk, match_bboxes)
     else:
-        show_grid(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk, match_bboxes)
+        show_grid(first_ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk, match_bboxes)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reference", required=True, help="Path to reference image")
+    parser.add_argument("--reference", required=True, help="Path to a reference image or a folder of reference images")
     parser.add_argument("--embeddings-dir", default="./embeddings", help="Directory with .npy files")
     parser.add_argument("--model", default="facebook/dinov3-vits16-pretrain-lvd1689m")
     parser.add_argument("--topk", type=int, default=40)

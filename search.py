@@ -58,7 +58,7 @@ def draw_bbox(image_path):
         useblit=True,
         button=[1],
         interactive=True,
-        props=dict(facecolor="red", edgecolor="red", alpha=0.3, fill=True),
+        props=dict(edgecolor="red", linewidth=2, fill=False), # No fill, solid edge
     )
 
     plt.tight_layout()
@@ -168,7 +168,7 @@ def show_detail(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk,
             mx1, my1, mx2, my2 = match_bboxes[idx]
             match_rect = mpatches.Rectangle(
                 (mx1, my1), mx2 - mx1, my2 - my1,
-                linewidth=2, edgecolor="cyan", facecolor="cyan", alpha=0.3)
+                linewidth=0.5, edgecolor="red", fill=False)
             ax_result.add_patch(match_rect)
 
         img_id = os.path.basename(filenames[idx]).split("_")[0]
@@ -226,7 +226,7 @@ def show_grid(ref_img, x1, y1, x2, y2, ranked, scores, filenames, topk,
             mx1, my1, mx2, my2 = match_bboxes[idx]
             match_rect = mpatches.Rectangle(
                 (mx1, my1), mx2 - mx1, my2 - my1,
-                linewidth=1.5, edgecolor="cyan", facecolor="cyan", alpha=0.25)
+                linewidth=2, edgecolor="cyan", fill = False)
             axes[r, c].add_patch(match_rect)
 
         img_id = os.path.basename(filenames[idx]).split("_")[0]
@@ -299,10 +299,12 @@ def search(reference_path, embeddings_dir, model_name, topk, bbox, detail=False)
         match_bboxes[idx] = (mx1, my1, mx2, my2)
 
     # Print results
-    print(f"\nTop {topk} matches for ROI on: {os.path.basename(reference_path)}")
-    print("-" * 60)
+    print(f"\nTop {topk} matches for ROI on: {os.path.abspath(reference_path)}")
+    print("-" * 80)
     for rank, idx in enumerate(ranked[:topk], 1):
-        print(f"  #{rank:2d}  score={scores[idx]:.4f}  {os.path.basename(filenames[idx])}")
+        # We use os.path.abspath to ensure it shows the full drive path (e.g., C:\Users\...)
+        full_path = os.path.abspath(filenames[idx])
+        print(f"  #{rank:2d}  score={scores[idx]:.4f}  {full_path}")
 
     # Display results
     if detail:
@@ -315,8 +317,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference", required=True, help="Path to reference image")
     parser.add_argument("--embeddings-dir", default="./embeddings", help="Directory with .npy files")
-    parser.add_argument("--model", default="facebook/dinov3-vitb16-pretrain-lvd1689m")
-    parser.add_argument("--topk", type=int, default=20)
+    parser.add_argument("--model", default="facebook/dinov3-vits16-pretrain-lvd1689m")
+    parser.add_argument("--topk", type=int, default=40)
     parser.add_argument("--bbox", type=str, default=None,
                         help="Bounding box as x1,y1,x2,y2 in pixels. If omitted, draw interactively.")
     parser.add_argument("--detail", action="store_true",

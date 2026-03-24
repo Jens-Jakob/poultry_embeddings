@@ -88,7 +88,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", required=True, help="Directory containing images")
     parser.add_argument("--output-dir", default="./embeddings", help="Where to save .npy files")
-    parser.add_argument("--model", default="facebook/dinov3-vitb16-pretrain-lvd1689m")
+    parser.add_argument("--model", default="facebook/dinov3-vits16-pretrain-lvd1689m")
     parser.add_argument("--batch-size", type=int, default=64)
     args = parser.parse_args()
 

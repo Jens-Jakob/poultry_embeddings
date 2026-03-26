@@ -74,7 +74,7 @@ def embed(data_dir, output_dir, model_name, batch_size):
     all_patches = all_patches / norms
 
     os.makedirs(output_dir, exist_ok=True)
-    np.save(os.path.join(output_dir, "patch_embeddings.npy"), all_patches)
+    np.save(os.path.join(output_dir, "patch_embeddings.npy"), all_patches.astype(np.float16))
     np.save(os.path.join(output_dir, "filenames.npy"), np.array(all_filenames))
     np.savez(os.path.join(output_dir, "meta.npz"),
              grid_h=grid_h, grid_w=grid_w, patch_size=patch_size,

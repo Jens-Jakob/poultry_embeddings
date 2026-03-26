@@ -35,7 +35,7 @@ from transformers import AutoImageProcessor, AutoModel
 
 
 def load_index(embeddings_dir):
-    patches = np.load(os.path.join(embeddings_dir, "patch_embeddings.npy"))
+    patches = np.load(os.path.join(embeddings_dir, "patch_embeddings.npy")).astype(np.float32)
     filenames = np.load(os.path.join(embeddings_dir, "filenames.npy"))
     meta = np.load(os.path.join(embeddings_dir, "meta.npz"))
     return patches, filenames, meta

@@ -37,7 +37,7 @@ def run_umap(vectors, n_neighbors, min_dist):
     return coords
 
 
-def make_thumbnail(path, size=80):
+def make_thumbnail(path, size=200):
     img = Image.open(path).convert("RGB")
     img.thumbnail((size, size))
     return np.array(img)
@@ -60,22 +60,23 @@ def plot(coords, filenames):
         spine.set_visible(False)
     ax.set_title("UMAP — Image Embeddings", fontsize=16, color="white", pad=15)
 
-    # Hover annotation — shows image thumbnail + filename
-    annot_img = OffsetImage(np.zeros((80, 80, 3), dtype=np.uint8), zoom=1.0)
+    # Hover annotation — image thumbnail above, filepath text below
+    annot_img = OffsetImage(np.zeros((200, 200, 3), dtype=np.uint8), zoom=1.0)
     annot_box = AnnotationBbox(
         annot_img, (0, 0),
-        xybox=(90, 90), xycoords="data", boxcoords="offset points",
-        pad=0.3,
-        bboxprops=dict(boxstyle="round,pad=0.3", fc="#16213e", ec="white", lw=1),
+        xybox=(110, 120), xycoords="data", boxcoords="offset points",
+        pad=0.4,
+        bboxprops=dict(boxstyle="round,pad=0.4", fc="#16213e", ec="white", lw=1),
         arrowprops=dict(arrowstyle="->", color="white", lw=1),
     )
     annot_box.set_visible(False)
     ax.add_artist(annot_box)
 
+    # Text sits below the image box, not overlapping it
     text_annot = ax.annotate(
-        "", xy=(0, 0), xytext=(90, 70), textcoords="offset points",
-        color="white", fontsize=7,
-        bbox=dict(boxstyle="round,pad=0.2", fc="#16213e", ec="none"),
+        "", xy=(0, 0), xytext=(110, 10), textcoords="offset points",
+        color="#aaaaaa", fontsize=7, ha="center",
+        bbox=dict(boxstyle="round,pad=0.3", fc="#16213e", ec="#444444", lw=0.5),
     )
     text_annot.set_visible(False)
 
@@ -109,7 +110,7 @@ def plot(coords, filenames):
             thumb = make_thumbnail(path)
             annot_img.set_data(thumb)
         except Exception:
-            annot_img.set_data(np.zeros((80, 80, 3), dtype=np.uint8))
+            annot_img.set_data(np.zeros((200, 200, 3), dtype=np.uint8))
 
         annot_box.xy = pos
         annot_box.set_visible(True)

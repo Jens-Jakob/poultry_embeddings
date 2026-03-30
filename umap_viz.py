@@ -60,11 +60,11 @@ def plot(coords, filenames):
         spine.set_visible(False)
     ax.set_title("UMAP — Image Embeddings", fontsize=16, color="white", pad=15)
 
-    # Hover annotation — image thumbnail above, filepath text below
+    # Hover annotation — image thumbnail + filepath text
     annot_img = OffsetImage(np.zeros((200, 200, 3), dtype=np.uint8), zoom=1.0)
     annot_box = AnnotationBbox(
         annot_img, (0, 0),
-        xybox=(110, 120), xycoords="data", boxcoords="offset points",
+        xybox=(0, -120), xycoords="data", boxcoords="offset points",
         pad=0.4,
         bboxprops=dict(boxstyle="round,pad=0.4", fc="#16213e", ec="white", lw=1),
         arrowprops=dict(arrowstyle="->", color="white", lw=1),
@@ -72,15 +72,30 @@ def plot(coords, filenames):
     annot_box.set_visible(False)
     ax.add_artist(annot_box)
 
-    # Text sits below the image box, not overlapping it
     text_annot = ax.annotate(
-        "", xy=(0, 0), xytext=(110, 10), textcoords="offset points",
+        "", xy=(0, 0), xytext=(0, -230), textcoords="offset points",
         color="#aaaaaa", fontsize=7, ha="center",
         bbox=dict(boxstyle="round,pad=0.3", fc="#16213e", ec="#444444", lw=0.5),
     )
     text_annot.set_visible(False)
 
     last_idx = [None]
+
+    def _get_offset(event):
+        """Pick offset direction that pushes the annotation toward the screen center."""
+        fig_w, fig_h = fig.get_size_inches() * fig.dpi  # figure size in pixels
+        ex, ey = event.x, event.y  # cursor position in pixels from bottom-left
+
+        # Horizontal: if cursor is in the right half, show image to the left, and vice versa
+        ox = -110 if ex > fig_w / 2 else 110
+
+        # Vertical: if cursor is in the top half, show image below, otherwise above
+        oy = -120 if ey > fig_h / 2 else 120
+
+        # Text label sits just past the image box in the same direction
+        ty = oy - 110 if oy < 0 else oy + 110
+
+        return ox, oy, ox, ty
 
     def on_hover(event):
         if event.inaxes != ax:
@@ -112,11 +127,16 @@ def plot(coords, filenames):
         except Exception:
             annot_img.set_data(np.zeros((200, 200, 3), dtype=np.uint8))
 
+        # Compute smart offset based on cursor position on screen
+        img_ox, img_oy, txt_ox, txt_oy = _get_offset(event)
+
         annot_box.xy = pos
+        annot_box.xybox = (img_ox, img_oy)
         annot_box.set_visible(True)
 
         basename = os.path.basename(path)
         text_annot.xy = pos
+        text_annot.xyann = (txt_ox, txt_oy)
         text_annot.set_text(basename)
         text_annot.set_visible(True)
 
@@ -130,7 +150,7 @@ def plot(coords, filenames):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--embeddings-dir", default="./embeddings")
+    parser.add_argument("--embeddings-dir", default="embeddings")
     parser.add_argument("--n-neighbors", type=int, default=15)
     parser.add_argument("--min-dist", type=float, default=0.1)
     args = parser.parse_args()

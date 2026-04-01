@@ -7,3 +7,8 @@ __pycache__/
 .idea/
 Poultry Defects.coco/
 .venv/
+embeddings_Boszo/
+embeddings_Stein/
+embeddings_Torsasen/
+embeddings_Vodnanska/
+plots/

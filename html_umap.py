@@ -14,7 +14,9 @@ Usage:
 import argparse
 import base64
 import io
+import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -61,34 +63,44 @@ def make_thumbnail_b64(path, size=180):
         return ""
 
 
+# Regex to pull YYYYMMDD from filenames like Cam=B-FN=20240408...
+_DATE_RE = re.compile(r"FN=(\d{8})")
+
+
+def parse_date_from_filename(filename: str) -> str:
+    """Extract YYYYMMDD date string from filename, or '' if not found."""
+    m = _DATE_RE.search(filename)
+    if m:
+        return m.group(1)
+    return ""
+
+
 def generate_html(coords, filenames, output_path, thumbnail_size=180):
     """Build a self-contained HTML file with Plotly scatter + hover images."""
     n = len(filenames)
     print(f"Generating thumbnails for {n} images ...")
 
-    # Build thumbnail data and hover text
     thumb_b64_list = []
     hover_texts = []
-    custom_data = []  # store base64 strings for JS hover callback
+    dates = []
     for i, fn in enumerate(filenames):
         path = str(fn)
         basename = os.path.basename(path)
         b64 = make_thumbnail_b64(path, size=thumbnail_size)
         thumb_b64_list.append(b64)
         hover_texts.append(basename)
+        dates.append(parse_date_from_filename(basename))
         if (i + 1) % 500 == 0 or i == n - 1:
             print(f"  {i + 1}/{n} thumbnails done")
 
-    # Serialize coordinates and data as JSON-safe lists
     x_vals = coords[:, 0].tolist()
     y_vals = coords[:, 1].tolist()
-
-    # Color by norm (same as matplotlib version)
     norms = np.linalg.norm(coords, axis=1).tolist()
 
-    # Build the HTML
-    # We use Plotly from CDN, and a custom hover div that shows the image
-    # because Plotly's built-in hover can't render large images well.
+    # Get sorted unique dates for the slider
+    unique_dates = sorted(set(d for d in dates if d))
+    print(f"  found {len(unique_dates)} unique dates in filenames")
+
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -142,7 +154,8 @@ def generate_html(coords, filenames, output_path, thumbnail_size=180):
         padding: 10px 24px;
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 12px;
+        flex-wrap: wrap;
     }
     .toolbar-title {
         color: #fff;
@@ -168,8 +181,35 @@ def generate_html(coords, filenames, output_path, thumbnail_size=180):
     .mode-btn:hover { background: rgba(255,255,255,0.15); color: #ccc; }
     .mode-btn.active { background: rgba(224, 92, 92, 0.3); color: #e05c5c; border-color: #e05c5c; }
 
-    /* Hide Plotly's built-in modebar since we have our own buttons */
     .modebar { display: none !important; }
+
+    .date-filter {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: auto;
+    }
+    .date-filter label {
+        font-size: 11px;
+        color: #888;
+    }
+    .date-filter input[type="date"] {
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 4px;
+        color: #ccc;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-family: inherit;
+    }
+    .date-filter input[type="date"]::-webkit-calendar-picker-indicator {
+        filter: invert(0.7);
+    }
+    .date-filter .date-info {
+        font-size: 10px;
+        color: #e05c5c;
+        min-width: 80px;
+    }
 
     #selection-panel {
         display: none;
@@ -240,6 +280,14 @@ def generate_html(coords, filenames, output_path, thumbnail_size=180):
     <button class="mode-btn" id="btn-lasso" onclick="setMode('lasso')">Lasso</button>
     <button class="mode-btn" id="btn-clear" onclick="clearSelection()">Clear Selection</button>
     <button class="mode-btn" id="btn-reset" onclick="resetZoom()">Reset Zoom</button>
+    <div class="date-filter">
+        <label>From</label>
+        <input type="date" id="date-from" onchange="applyDateFilter()" />
+        <label>To</label>
+        <input type="date" id="date-to" onchange="applyDateFilter()" />
+        <button class="mode-btn" id="btn-date-clear" onclick="clearDateFilter()">Clear Dates</button>
+        <span class="date-info" id="date-info"></span>
+    </div>
 </div>
 <div id="plot"></div>
 <div id="hover-card">
@@ -260,23 +308,46 @@ var Y = __Y_VALS__;
 var NORMS = __NORMS__;
 var LABELS = __LABELS__;
 var THUMBS = __THUMBS__;
+var DATES = __DATES__;
+var UNIQUE_DATES = __UNIQUE_DATES__;
 // ---- END DATA ----
 
 document.getElementById('meta-info').textContent = X.length + ' images';
+
+// Set date picker min/max from data
+if (UNIQUE_DATES.length > 0) {
+    var minD = UNIQUE_DATES[0];
+    var maxD = UNIQUE_DATES[UNIQUE_DATES.length - 1];
+    var fmtDate = function(d) { return d.slice(0,4) + '-' + d.slice(4,6) + '-' + d.slice(6,8); };
+    document.getElementById('date-from').min = fmtDate(minD);
+    document.getElementById('date-from').max = fmtDate(maxD);
+    document.getElementById('date-to').min = fmtDate(minD);
+    document.getElementById('date-to').max = fmtDate(maxD);
+}
+
+// Base colors and sizes — used to reset after filtering
+var baseOpacity = [];
+var baseColors = [];
+var baseSizes = [];
+for (var i = 0; i < X.length; i++) {
+    baseOpacity.push(0.7);
+    baseColors.push(NORMS[i]);
+    baseSizes.push(4);
+}
 
 var trace = {
     x: X, y: Y,
     mode: 'markers',
     type: 'scattergl',
     marker: {
-        size: 4,
-        color: NORMS,
+        size: baseSizes.slice(),
+        color: baseColors.slice(),
         colorscale: 'Plasma',
-        opacity: 0.7,
+        opacity: baseOpacity.slice(),
         line: { width: 0 }
     },
     text: LABELS,
-    hoverinfo: 'none',  // we handle hover ourselves
+    hoverinfo: 'none',
     customdata: THUMBS
 };
 
@@ -311,7 +382,6 @@ function resetZoom() {
     Plotly.relayout('plot', { 'xaxis.autorange': true, 'yaxis.autorange': true });
 }
 
-// Custom hover card that follows cursor toward center
 var hoverCard = document.getElementById('hover-card');
 var hoverImg = document.getElementById('hover-img');
 var hoverLabel = document.getElementById('hover-label');
@@ -322,15 +392,74 @@ var selThumbs = document.getElementById('sel-thumbs');
 var currentSelection = [];
 
 function clearSelection() {
-    // Clear highlighted points
     Plotly.restyle('plot', { selectedpoints: [null] }, [0]);
-    // Remove the drawn selection box/lasso shape from the plot
     Plotly.relayout('plot', { selections: [] });
     selPanel.style.display = 'none';
     currentSelection = [];
     setMode('pan');
 }
 
+// ---- DATE FILTERING ----
+function applyDateFilter() {
+    var fromVal = document.getElementById('date-from').value.replace(/-/g, '');
+    var toVal = document.getElementById('date-to').value.replace(/-/g, '');
+
+    if (!fromVal && !toVal) {
+        clearDateFilter();
+        return;
+    }
+
+    var newOpacity = [];
+    var newColors = [];
+    var newSizes = [];
+    var matchCount = 0;
+
+    for (var i = 0; i < DATES.length; i++) {
+        var d = DATES[i];
+        var inRange = true;
+        if (!d) {
+            inRange = false;  // no date parsed = dim
+        } else {
+            if (fromVal && d < fromVal) inRange = false;
+            if (toVal && d > toVal) inRange = false;
+        }
+
+        if (inRange) {
+            newOpacity.push(0.9);
+            newColors.push('#e05c5c');
+            newSizes.push(6);
+            matchCount++;
+        } else {
+            newOpacity.push(0.08);
+            newColors.push('#333344');
+            newSizes.push(3);
+        }
+    }
+
+    Plotly.restyle('plot', {
+        'marker.opacity': [newOpacity],
+        'marker.color': [newColors],
+        'marker.size': [newSizes],
+        'marker.colorscale': null
+    }, [0]);
+
+    document.getElementById('date-info').textContent = matchCount + ' in range';
+}
+
+function clearDateFilter() {
+    document.getElementById('date-from').value = '';
+    document.getElementById('date-to').value = '';
+    document.getElementById('date-info').textContent = '';
+
+    Plotly.restyle('plot', {
+        'marker.opacity': [baseOpacity],
+        'marker.color': [baseColors],
+        'marker.size': [baseSizes],
+        'marker.colorscale': [['Plasma']]
+    }, [0]);
+}
+
+// ---- SELECTION ----
 plotDiv.on('plotly_selected', function(data) {
     if (!data || !data.points || data.points.length === 0) {
         selPanel.style.display = 'none';
@@ -344,7 +473,6 @@ plotDiv.on('plotly_selected', function(data) {
 
     selNum.textContent = currentSelection.length;
 
-    // Show thumbnail preview (max 30 to keep it manageable)
     selThumbs.innerHTML = '';
     var showCount = Math.min(currentSelection.length, 30);
     for (var i = 0; i < showCount; i++) {
@@ -391,6 +519,7 @@ function exportSelection() {
     URL.revokeObjectURL(url);
 }
 
+// ---- HOVER ----
 plotDiv.on('plotly_hover', function(data) {
     var pt = data.points[0];
     var b64 = pt.customdata;
@@ -404,7 +533,6 @@ plotDiv.on('plotly_hover', function(data) {
 
     hoverCard.style.display = 'block';
 
-    // Position: push toward screen center
     var evt = data.event;
     var vw = window.innerWidth;
     var vh = window.innerHeight;
@@ -424,7 +552,6 @@ plotDiv.on('plotly_hover', function(data) {
         top = evt.clientY + gap;
     }
 
-    // Clamp to viewport
     left = Math.max(4, Math.min(left, vw - cardW - 4));
     top = Math.max(4, Math.min(top, vh - cardH - 4));
 
@@ -439,12 +566,13 @@ plotDiv.on('plotly_unhover', function() {
 </body>
 </html>"""
 
-    import json
     html = html.replace("__X_VALS__", json.dumps(x_vals))
     html = html.replace("__Y_VALS__", json.dumps(y_vals))
     html = html.replace("__NORMS__", json.dumps(norms))
     html = html.replace("__LABELS__", json.dumps(hover_texts))
     html = html.replace("__THUMBS__", json.dumps(thumb_b64_list))
+    html = html.replace("__DATES__", json.dumps(dates))
+    html = html.replace("__UNIQUE_DATES__", json.dumps(unique_dates))
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -455,9 +583,9 @@ plotDiv.on('plotly_unhover', function() {
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--embeddings-dir", default=r"C:\Users\jjs\Desktop\embedding program\poultry_embeddings\embeddings_Stein")
-    parser.add_argument("--n-neighbors", type=int, default=15)
-    parser.add_argument("--min-dist", type=float, default=0.1)
+    parser.add_argument("--embeddings-dir", default=r"C:\Users\jjs\Desktop\embedding program\poultry_embeddings\embeddings\embeddings_EmptyShackle")
+    parser.add_argument("--n-neighbors", type=int, default=10)
+    parser.add_argument("--min-dist", type=float, default=0.05)
     parser.add_argument("--output", default="umap_report.html",
         help="Output HTML file path")
     parser.add_argument("--thumbnail-size", type=int, default=270,
